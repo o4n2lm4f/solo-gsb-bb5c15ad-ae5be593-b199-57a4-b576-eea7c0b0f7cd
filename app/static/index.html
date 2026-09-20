@@ -57,6 +57,17 @@
         </div>
       </div>
 
+      <!-- 候选管理：停用 / 恢复 -->
+      <div class="card">
+        <h3>🧩 候选管理</h3>
+        <p class="muted card-hint">
+          评审进行中可停用任一候选（至少保留 3 个启用候选）；停用不会删除其判断记录，
+          排名、进度、待比较组合、冲突与推荐均只按启用候选重算。恢复后按最初录入顺序回到评审，
+          已比较过的组合沿用原判断，仅未比较的组合重新进入待评审。
+        </p>
+        <div id="candidate-manage" class="candidate-manage"></div>
+      </div>
+
       <!-- 下一对推荐 -->
       <div id="nextpair-card" class="card hidden">
         <h3>🎯 下一对推荐</h3>

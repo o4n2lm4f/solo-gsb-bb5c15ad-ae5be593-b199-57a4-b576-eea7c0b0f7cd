@@ -48,6 +48,20 @@ function render() {
   $("#setup-view").classList.add("hidden");
   $("#review-view").classList.remove("hidden");
 
+  // 停用/恢复后安全清空引用停用候选的跳转、复核选择与排名依据选择
+  const enabled = new Set(state.candidates);
+  if (focusPair && (!enabled.has(focusPair.a) || !enabled.has(focusPair.b))) {
+    focusPair = null;
+  }
+  if (selectedPair && (!enabled.has(selectedPair.a) || !enabled.has(selectedPair.b))) {
+    selectedPair = null;
+  }
+  if (basisSelection.some((n) => !enabled.has(n))) {
+    basisSelection = basisSelection.filter((n) => enabled.has(n));
+    basisData = null;
+    basisReq += 1; // 丢弃在途的旧（含停用候选）排名依据响应
+  }
+
   const { done, total } = state.progress;
   $("#progress-bar").style.width = total ? `${(done / total) * 100}%` : "0%";
   $("#progress-text").textContent = `${done} / ${total}`;
@@ -75,6 +89,104 @@ function render() {
   renderConflict();
   renderNextPair();
   renderBasis();
+  renderCandidates();
+}
+
+/* ---------- 候选管理：停用 / 恢复 ---------- */
+
+function renderCandidates() {
+  const box = $("#candidate-manage");
+  box.innerHTML = "";
+
+  const makeGroup = (title, names, disabled) => {
+    const head = document.createElement("p");
+    head.className = "cand-group-title";
+    head.textContent = title;
+    const list = document.createElement("div");
+    list.className = "cand-list";
+    if (names.length === 0) {
+      const none = document.createElement("span");
+      none.className = "empty muted";
+      none.textContent = "（无）";
+      list.appendChild(none);
+    }
+    for (const name of names) {
+      const item = document.createElement("span");
+      item.className = "cand-item" + (disabled ? " disabled-cand" : "");
+      const label = document.createElement("span");
+      label.className = "cand-item-name";
+      label.textContent = name;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      if (disabled) {
+        btn.className = "cand-on";
+        btn.textContent = "恢复";
+        btn.title = `恢复「${name}」：按最初录入顺序回到评审，已有判断沿用，缺失组合重新待评审`;
+        btn.addEventListener("click", () => reactivateCandidate(name));
+      } else {
+        btn.className = "cand-off";
+        // 至少保留 3 个启用候选：只剩 3 个时禁用按钮
+        const canDisable = state.candidates.length > 3;
+        btn.disabled = !canDisable;
+        btn.textContent = "停用";
+        btn.title = canDisable
+          ? `停用「${name}」：保留其全部判断记录，只是不参与进度、排名、冲突与推荐`
+          : "至少保留 3 个启用候选";
+        btn.addEventListener("click", () => deactivateCandidate(name));
+      }
+      item.append(label, btn);
+      list.appendChild(item);
+    }
+    box.append(head, list);
+  };
+
+  // 启用组按最初录入顺序（state.candidates 已过滤保持原序）；停用组同序
+  makeGroup(`启用中的候选（${state.candidates.length}）`, state.candidates, false);
+  makeGroup(`已停用的候选（${state.disabled.length}；判断记录已保留）`, state.disabled, true);
+}
+
+async function deactivateCandidate(name) {
+  if (busy || !state) return;
+  if (!confirm(
+    `确定停用「${name}」吗？\n` +
+    "其全部判断记录都会保留（不删除），但进度、待比较组合、Schulze 排名、矩阵、\n" +
+    "循环冲突、最少改判与下一对推荐将只按其余启用候选重算。\n" +
+    "恢复后已有组合沿用原判断，仅未比较的组合重新进入待评审。"
+  )) {
+    return;
+  }
+  busy = true;
+  try {
+    state = await api(`/api/sessions/${state.session_id}/candidates/deactivate`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    stateChanged();
+    toast(`已停用「${name}」，判断记录已保留`);
+  } catch (e) {
+    toast(e.message);
+    await refresh();
+  } finally {
+    busy = false;
+  }
+}
+
+async function reactivateCandidate(name) {
+  if (busy || !state) return;
+  busy = true;
+  try {
+    state = await api(`/api/sessions/${state.session_id}/candidates/reactivate`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    stateChanged();
+    toast(`已恢复「${name}」：已有组合沿用原判断，缺失组合重新待评审`);
+  } catch (e) {
+    toast(e.message);
+    await refresh();
+  } finally {
+    busy = false;
+  }
 }
 
 function renderRanking() {

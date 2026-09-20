@@ -36,7 +36,10 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    candidates TEXT NOT NULL
+    candidates TEXT NOT NULL,
+    -- 已停用候选项名单（JSON 数组，按候选录入顺序排列）；
+    -- candidates 始终保留全部候选与最初录入顺序，停用不删除任何判断记录
+    disabled TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS judgments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +63,12 @@ def get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        # 旧库迁移（Docker 卷中可能已存在建表时没有 disabled 列的库）
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+        if "disabled" not in cols:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN disabled TEXT NOT NULL DEFAULT '[]'"
+            )
 
 
 init_db()  # 模块加载即建库建表（幂等），lifespan 中再执行一次以确保任意部署方式下可用
@@ -91,21 +100,53 @@ class SuggestionApply(BaseModel):
     pairs: list[dict[str, str]] | None = None
 
 
+class CandidateToggle(BaseModel):
+    name: str
+
+
 # ---------- 状态组装 ----------
 
-def load_state(conn: sqlite3.Connection, session_id: str) -> dict:
-    row = conn.execute("SELECT candidates FROM sessions WHERE id = ?", (session_id,)).fetchone()
+def _load_rows(
+    conn: sqlite3.Connection, session_id: str
+) -> tuple[list[str], set[str], list[dict]]:
+    """读取会话的全部候选（最初录入顺序）、停用名单与全部判断记录。
+
+    判断记录**始终全量返回**——停用候选不删除其任何判断，撤销仍按记录
+    id 顺序工作。
+    """
+    row = conn.execute(
+        "SELECT candidates, disabled FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="会话不存在或已被删除")
-    candidates: list[str] = json.loads(row["candidates"])
+    all_candidates: list[str] = json.loads(row["candidates"])
+    disabled: set[str] = set(json.loads(row["disabled"] or "[]"))
+    # 防御性规整：停用名单只保留仍存在的候选
+    disabled &= set(all_candidates)
 
-    history: list[dict] = []
-    judged: dict[tuple[str, str], str] = {}
+    all_history: list[dict] = []
     for r in conn.execute(
-        "SELECT a, b, result FROM judgments WHERE session_id = ? ORDER BY id", (session_id,)
+        "SELECT a, b, result FROM judgments WHERE session_id = ? ORDER BY id",
+        (session_id,),
     ):
-        judged[(r["a"], r["b"])] = r["result"]
-        history.append({"a": r["a"], "b": r["b"], "result": r["result"]})
+        all_history.append({"a": r["a"], "b": r["b"], "result": r["result"]})
+    return all_candidates, disabled, all_history
+
+
+def load_state(conn: sqlite3.Connection, session_id: str) -> dict:
+    all_candidates, disabled_set, all_history = _load_rows(conn, session_id)
+
+    # 启用候选：按**最初录入顺序**过滤；所有计算只使用启用候选
+    candidates = [name for name in all_candidates if name not in disabled_set]
+    enabled = set(candidates)
+    # 与停用候选有关的判断记录保留在库中，但不参与本轮任何计算
+    history = [
+        h for h in all_history if h["a"] in enabled and h["b"] in enabled
+    ]
+
+    judged: dict[tuple[str, str], str] = {}
+    for h in history:
+        judged[(h["a"], h["b"])] = h["result"]
 
     pairs, pending = [], []
     for a, b in combinations(candidates, 2):
@@ -185,7 +226,9 @@ def load_state(conn: sqlite3.Connection, session_id: str) -> dict:
 
     return {
         "session_id": session_id,
+        # candidates 仅含启用候选（按最初录入顺序）；disabled 为停用名单（同序）
         "candidates": candidates,
+        "disabled": [name for name in all_candidates if name in disabled_set],
         "progress": {"done": len(history), "total": len(pairs)},
         "current_pair": pending[0] if pending else None,
         "pending": pending,
@@ -195,7 +238,8 @@ def load_state(conn: sqlite3.Connection, session_id: str) -> dict:
         "suggestion": suggestion,
         # 下一对优先级推荐：纯内存模拟，不写库、不影响进度
         "next_pair": recommend_next_pair(candidates, history, pending),
-        "can_undo": bool(history),
+        # 撤销按原始判断记录顺序工作（停用候选的记录仍可被撤销）
+        "can_undo": bool(all_history),
     }
 
 
@@ -250,20 +294,18 @@ def ranking_basis(sid: str, a: str, b: str):
     """
     conn = get_conn()
     try:
-        row = conn.execute(
-            "SELECT candidates FROM sessions WHERE id = ?", (sid,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="会话不存在或已被删除")
-        candidates: list[str] = json.loads(row["candidates"])
+        all_candidates, disabled_set, _ = _load_rows(conn, sid)
+        candidates = [name for name in all_candidates if name not in disabled_set]
         if a == b or a not in candidates or b not in candidates:
-            raise HTTPException(422, "无效的候选项组合")
+            raise HTTPException(422, "无效的候选项组合（候选项不存在或已停用）")
+        enabled = set(candidates)
         history = [
             {"a": r["a"], "b": r["b"], "result": r["result"]}
             for r in conn.execute(
                 "SELECT a, b, result FROM judgments WHERE session_id = ? ORDER BY id",
                 (sid,),
             )
+            if r["a"] in enabled and r["b"] in enabled
         ]
         return pair_explanation(candidates, history, a, b)
     finally:
@@ -282,8 +324,11 @@ def judge(sid: str, payload: JudgmentCreate):
     try:
         state = load_state(conn, sid)
         order = {name: i for i, name in enumerate(state["candidates"])}
-        if payload.a == payload.b or payload.a not in order or payload.b not in order:
+        all_names = set(state["candidates"]) | set(state["disabled"])
+        if payload.a == payload.b or payload.a not in all_names or payload.b not in all_names:
             raise HTTPException(422, "无效的比较组合")
+        if payload.a not in order or payload.b not in order:
+            raise HTTPException(409, "该组合含已停用候选，请先恢复后再评审")
         # 统一按候选录入顺序存储；result 始终相对请求中先出现的 a 解释
         a, b = sorted((payload.a, payload.b), key=order.__getitem__)
         if not any(p["a"] == a and p["b"] == b for p in state["pending"]):
@@ -316,8 +361,11 @@ def revise(sid: str, payload: JudgmentCreate):
     try:
         state = load_state(conn, sid)
         order = {name: i for i, name in enumerate(state["candidates"])}
-        if payload.a == payload.b or payload.a not in order or payload.b not in order:
+        all_names = set(state["candidates"]) | set(state["disabled"])
+        if payload.a == payload.b or payload.a not in all_names or payload.b not in all_names:
             raise HTTPException(422, "无效的比较组合")
+        if payload.a not in order or payload.b not in order:
+            raise HTTPException(409, "该组合含已停用候选，请先恢复后再评审")
         # 统一按候选录入顺序存储；result 始终相对请求中先出现的 a 解释
         a, b = sorted((payload.a, payload.b), key=order.__getitem__)
         if payload.result == "tie":
@@ -410,6 +458,70 @@ def reset(sid: str):
         conn.execute("DELETE FROM judgments WHERE session_id = ?", (sid,))
         conn.commit()
         return load_state(conn, sid)
+    finally:
+        conn.close()
+
+
+def _toggle_candidate(
+    conn: sqlite3.Connection, sid: str, name: str, *, disable: bool
+) -> dict:
+    """停用（disable=True）或恢复（disable=False）一个候选项。
+
+    - 停用/恢复只改写 sessions.disabled 名单，**不删除任何判断记录**；
+    - 恢复后候选按最初录入顺序回到评审，已有组合沿用原判断，仅缺失组合
+      重新进入待比较；
+    - 任何时刻至少保留 MIN_CANDIDATES 个启用候选。
+    """
+    all_candidates, disabled_set, _ = _load_rows(conn, sid)
+    if name not in all_candidates:
+        raise HTTPException(422, "候选项不存在")
+    if disable and name in disabled_set:
+        raise HTTPException(409, "该候选项已停用")
+    if not disable and name not in disabled_set:
+        raise HTTPException(409, "该候选项处于启用状态")
+    if disable and len(all_candidates) - len(disabled_set) <= MIN_CANDIDATES:
+        raise HTTPException(
+            409, f"至少保留 {MIN_CANDIDATES} 个启用候选，无法继续停用"
+        )
+
+    if disable:
+        disabled_set.add(name)
+    else:
+        disabled_set.discard(name)
+    # 持久化时按最初录入顺序排列，结果稳定可复现
+    disabled_list = [c for c in all_candidates if c in disabled_set]
+    conn.execute(
+        "UPDATE sessions SET disabled = ? WHERE id = ?",
+        (json.dumps(disabled_list, ensure_ascii=False), sid),
+    )
+    conn.commit()
+    return load_state(conn, sid)
+
+
+@app.post("/api/sessions/{sid}/candidates/deactivate", status_code=200)
+def deactivate_candidate(sid: str, payload: CandidateToggle):
+    """停用一个候选项：其全部判断记录保留，只是不参与任何计算。
+
+    停用后进度、待比较组合、Schulze 排名、矩阵、循环冲突、最少改判与
+    下一对推荐均只按启用候选重算；至少保留 3 个启用候选。
+    """
+    conn = get_conn()
+    try:
+        return _toggle_candidate(conn, sid, payload.name, disable=True)
+    finally:
+        conn.close()
+
+
+@app.post("/api/sessions/{sid}/candidates/reactivate", status_code=200)
+def reactivate_candidate(sid: str, payload: CandidateToggle):
+    """恢复一个已停用候选项：按最初录入顺序回到评审。
+
+    其与其他候选的已有组合沿用原判断记录，仅缺失（此前未比较）的组合
+    重新进入待评审。
+    """
+    conn = get_conn()
+    try:
+        return _toggle_candidate(conn, sid, payload.name, disable=False)
     finally:
         conn.close()
 

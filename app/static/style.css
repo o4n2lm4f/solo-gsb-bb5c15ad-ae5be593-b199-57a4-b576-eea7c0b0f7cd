@@ -169,6 +169,51 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   flex-wrap: wrap;
 }
 
+/* ---------- 候选管理（停用 / 恢复） ---------- */
+.candidate-manage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+.cand-group-title {
+  margin: 0 0 0.1rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.cand-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.cand-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 99px;
+  padding: 0.28rem 0.4rem 0.28rem 0.85rem;
+  font-size: 0.9rem;
+}
+.cand-item-name { word-break: break-all; }
+.cand-item button {
+  padding: 0.12rem 0.6rem;
+  font-size: 0.78rem;
+  border-radius: 99px;
+}
+.cand-off {
+  color: var(--red);
+  border-color: rgba(255, 107, 107, 0.45);
+}
+.cand-off:hover:not(:disabled) { background: rgba(255, 107, 107, 0.12); }
+.cand-on {
+  color: var(--green);
+  border-color: rgba(62, 207, 142, 0.45);
+}
+.cand-on:hover:not(:disabled) { background: rgba(62, 207, 142, 0.12); }
+.cand-item.disabled-cand { opacity: 0.62; }
+.cand-item.disabled-cand .cand-item-name { text-decoration: line-through; }
+
 /* ---------- 排名与待比较 ---------- */
 .grid {
   display: grid;
