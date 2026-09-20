@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>两两决策台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>⚖️ 两两决策台</h1>
+    <p class="subtitle">逐对比较 · Schulze 最强路径法实时排名</p>
+  </header>
+
+  <main>
+    <!-- 录入候选项 -->
+    <section id="setup-view" class="card">
+      <h2>录入候选项</h2>
+      <p class="muted">每行一个候选项，共 3～12 个，名称不可重复。</p>
+      <textarea id="candidates-input" rows="8" placeholder="方案 A&#10;方案 B&#10;方案 C&#10;方案 D"></textarea>
+      <div class="row">
+        <span id="setup-count" class="muted"></span>
+        <button id="start-btn" class="primary">开始评审</button>
+      </div>
+    </section>
+
+    <!-- 评审台 -->
+    <section id="review-view" class="hidden">
+      <div class="card">
+        <div class="progress-row">
+          <div class="progress"><div id="progress-bar"></div></div>
+          <span id="progress-text" class="muted"></span>
+        </div>
+
+        <div id="jump-banner" class="hidden">
+          <span>🎯 已跳转至推荐组合 · 原顺序下一对为 <strong id="jump-original"></strong></span>
+          <button id="jump-back" type="button">返回原顺序</button>
+        </div>
+
+        <div id="current-pair">
+          <h2>你更倾向哪一个？</h2>
+          <div class="duel">
+            <button id="btn-a" class="duel-btn" title="快捷键 ←"></button>
+            <span class="vs">VS</span>
+            <button id="btn-b" class="duel-btn" title="快捷键 →"></button>
+          </div>
+          <button id="btn-tie" class="tie-btn" title="快捷键 ↓">平局 / 难分伯仲</button>
+          <p class="muted hint">快捷键：← 左边胜 · → 右边胜 · ↓ 平局 · Ctrl+Z 撤销</p>
+        </div>
+
+        <div id="done-banner" class="hidden">🎉 全部组合已比较完毕，以下为最终排名。</div>
+
+        <div class="toolbar">
+          <button id="undo-btn">↩︎ 撤销上一判断</button>
+          <button id="reset-btn">🗑 重置本轮</button>
+          <button id="new-btn">✚ 新一轮</button>
+        </div>
+      </div>
+
+      <!-- 下一对推荐 -->
+      <div id="nextpair-card" class="card hidden">
+        <h3>🎯 下一对推荐</h3>
+        <p class="nextpair-head">建议优先评审：<strong id="nextpair-name"></strong></p>
+        <p id="nextpair-reason" class="muted"></p>
+        <div class="nextpair-previews">
+          <div class="nextpair-preview">
+            <p class="nextpair-preview-title" id="nextpair-title-a"></p>
+            <div id="nextpair-rank-a"></div>
+          </div>
+          <div class="nextpair-preview">
+            <p class="nextpair-preview-title">若平局</p>
+            <div id="nextpair-rank-tie"></div>
+          </div>
+          <div class="nextpair-preview">
+            <p class="nextpair-preview-title" id="nextpair-title-b"></p>
+            <div id="nextpair-rank-b"></div>
+          </div>
+        </div>
+        <div class="revise-actions">
+          <button id="nextpair-jump" class="primary">🎯 立即评审这一对</button>
+          <span id="nextpair-is-current" class="muted hidden">推荐组合即当前组合，直接判定即可</span>
+        </div>
+      </div>
+
+      <!-- 循环冲突复核 -->
+      <div id="conflict-card" class="card conflict hidden">
+        <h3>🔄 循环冲突复核</h3>
+        <p class="conflict-desc">检测到循环胜负：<strong id="conflict-path"></strong></p>
+        <p class="muted">点击环上任一组合（或矩阵中的红色格）即可重新判定，进度统计不受影响：</p>
+        <div id="conflict-pairs" class="chips"></div>
+        <div id="revise-panel" class="hidden">
+          <p id="revise-title"></p>
+          <div class="revise-actions">
+            <button id="revise-a" class="primary"></button>
+            <button id="revise-tie" class="tie-inline">平局</button>
+            <button id="revise-b" class="primary"></button>
+            <button id="revise-cancel">取消</button>
+          </div>
+        </div>
+        <div id="suggestion-panel">
+          <div class="suggestion-head">
+            <span class="suggestion-badge">最少改判方案</span>
+            <span id="suggestion-count" class="muted"></span>
+          </div>
+          <p class="muted">
+            将以下 <strong id="suggestion-num"></strong> 个组合改为平局，
+            即可用最少的改动消除全部循环（平局与未比较组合不参与计算）：
+          </p>
+          <div id="suggestion-pairs" class="chips"></div>
+          <div id="suggestion-preview" class="suggestion-preview">
+            <p class="suggestion-preview-title">应用后受影响结果：</p>
+            <div id="suggestion-affected"></div>
+            <p class="suggestion-preview-title">应用后排名预览：</p>
+            <div id="suggestion-ranking"></div>
+          </div>
+          <div class="revise-actions">
+            <button id="suggestion-apply" class="primary">✓ 确认并批量改为平局</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>实时排名（Schulze）</h3>
+          <p class="muted card-hint">点击两个候选项名称，可在下方查看「排名依据」</p>
+          <div id="ranking"></div>
+        </div>
+        <div class="card">
+          <h3>尚未比较的组合</h3>
+          <div id="pending-list" class="chips"></div>
+        </div>
+      </div>
+
+      <!-- 排名依据 -->
+      <div id="basis-card" class="card hidden">
+        <div class="basis-head">
+          <h3>📊 排名依据：<span id="basis-pair"></span></h3>
+          <button id="basis-close" type="button">✕ 关闭</button>
+        </div>
+        <p id="basis-verdict" class="basis-verdict"></p>
+        <p class="muted">
+          路径强度为路径上最弱一环（胜负边 1.0、平局边 0.5）；同强度路径优先边数更少，
+          再按候选录入顺序稳定选择，路径不重复节点。判定与上方实时排名一致。
+        </p>
+        <div id="basis-directions" class="basis-directions"></div>
+      </div>
+
+      <div class="card">
+        <h3>胜负矩阵</h3>
+        <p class="muted">行 vs 列：✓ 行胜 · ✗ 行负 · ＝ 平局 · · 未比较（点击行/列标题选择两个候选项查看排名依据）</p>
+        <div id="matrix-wrap"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

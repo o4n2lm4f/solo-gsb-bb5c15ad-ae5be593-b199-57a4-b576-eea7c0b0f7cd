@@ -1,0 +1,14 @@
+services:
+  decision-desk:
+    build: .
+    container_name: pairwise-decision-desk
+    ports:
+      - "8000:8000"        # 宿主机端口:容器端口，改左侧即可更换对外端口
+    environment:
+      DECISION_DB: /app/data/decision.db   # SQLite 数据库文件路径
+    volumes:
+      - decision-data:/app/data            # 持久化评审进度
+    restart: unless-stopped
+
+volumes:
+  decision-data:
