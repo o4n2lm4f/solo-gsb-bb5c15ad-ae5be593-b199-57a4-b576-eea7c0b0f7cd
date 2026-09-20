@@ -487,6 +487,70 @@ td.cell-basis {
 }
 .basis-error { color: var(--red); }
 
+/* ---------- 候选管理：停用 / 恢复 ---------- */
+.candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+}
+.candidate-row.disabled { opacity: 0.62; }
+.candidate-idx {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 99px;
+  padding: 0.05rem 0.5rem;
+}
+.candidate-name {
+  flex: 1;
+  word-break: break-all;
+  font-weight: 600;
+}
+.candidate-row.disabled .candidate-name {
+  text-decoration: line-through;
+  font-weight: 400;
+  color: var(--muted);
+}
+.candidate-status {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  border-radius: 99px;
+  padding: 0.1rem 0.6rem;
+}
+.candidate-status.status-on {
+  color: var(--green);
+  border: 1px solid rgba(62, 207, 142, 0.5);
+}
+.candidate-status.status-off {
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+}
+.candidate-btn {
+  flex-shrink: 0;
+  padding: 0.3rem 0.9rem;
+  font-size: 0.85rem;
+}
+.candidate-btn.off {
+  color: var(--red);
+  border-color: rgba(255, 107, 107, 0.45);
+}
+.candidate-btn.off:hover:not(:disabled) { background: rgba(255, 107, 107, 0.12); }
+.candidate-btn.on {
+  color: var(--green);
+  border-color: rgba(62, 207, 142, 0.45);
+}
+.candidate-btn.on:hover:not(:disabled) { background: rgba(62, 207, 142, 0.12); }
+
 /* ---------- 提示条 ---------- */
 #toast {
   position: fixed;

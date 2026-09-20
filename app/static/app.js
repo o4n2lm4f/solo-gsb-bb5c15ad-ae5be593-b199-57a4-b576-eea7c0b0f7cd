@@ -75,6 +75,7 @@ function render() {
   renderConflict();
   renderNextPair();
   renderBasis();
+  renderCandidates();
 }
 
 function renderRanking() {
@@ -99,13 +100,95 @@ function renderPending() {
   }
 }
 
+/* ---------- 候选管理：停用 / 恢复 ---------- */
+
+function renderCandidates() {
+  const box = $("#candidate-manage");
+  box.innerHTML = "";
+  const active = state.active_candidates;
+  const disabledSet = new Set(state.disabled_candidates);
+  const minReached = active.length <= 3; // 至少保留 3 个启用候选项
+
+  // 始终按最初录入顺序排列（state.candidates 不含停用造成的顺序变化）
+  state.candidates.forEach((name, i) => {
+    const isDisabled = disabledSet.has(name);
+    const row = document.createElement("div");
+    row.className = "candidate-row" + (isDisabled ? " disabled" : "");
+
+    const idx = document.createElement("span");
+    idx.className = "candidate-idx";
+    idx.textContent = `#${i + 1}`;
+
+    const label = document.createElement("span");
+    label.className = "candidate-name";
+    label.textContent = name;
+
+    const status = document.createElement("span");
+    status.className = "candidate-status " + (isDisabled ? "status-off" : "status-on");
+    status.textContent = isDisabled ? "已停用" : "启用中";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = isDisabled ? "candidate-btn on" : "candidate-btn off";
+    btn.textContent = isDisabled ? "恢复" : "停用";
+    if (isDisabled) {
+      btn.title = "恢复后按最初录入顺序回到评审，已有判断沿用";
+      btn.addEventListener("click", () => toggleCandidate(name, "reactivate"));
+    } else {
+      btn.disabled = minReached;
+      btn.title = minReached
+        ? "至少需要保留 3 个启用候选项"
+        : "停用不删除判断记录，恢复后已有组合沿用原判断";
+      btn.addEventListener("click", () => toggleCandidate(name, "deactivate"));
+    }
+
+    row.append(idx, label, status, btn);
+    box.appendChild(row);
+  });
+}
+
+async function toggleCandidate(name, action) {
+  if (busy || !state) return;
+  const verb = action === "deactivate" ? "停用" : "恢复";
+  if (action === "deactivate") {
+    const ok = confirm(
+      `确定停用候选项「${name}」吗？\n\n` +
+      "· 不删除该候选项的任何判断记录，恢复后已有组合沿用原判断；\n" +
+      "· 进度、待比较组合、排名、矩阵、冲突复核与下一对推荐只按启用候选项重算；\n" +
+      "· 至少保留 3 个启用候选项。"
+    );
+    if (!ok) return;
+  }
+  busy = true;
+  try {
+    state = await api(
+      `/api/sessions/${state.session_id}/candidates/${action}`,
+      { method: "POST", body: JSON.stringify({ name }) }
+    );
+    // 跳转 / 冲突复核 / 排名依据若引用了停用项则安全清空（撤销仍按原记录顺序）
+    focusPair = null;
+    selectedPair = null;
+    basisData = null;
+    basisReq += 1;
+    if (action === "deactivate") {
+      basisSelection = basisSelection.filter((n) => state.active_candidates.includes(n));
+    }
+    stateChanged();
+    toast(action === "deactivate" ? `已停用「${name}」，判断记录均已保留` : `已恢复「${name}」，已有判断沿用原结果`);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    busy = false;
+  }
+}
+
 const SYMBOLS = { win: "✓", lose: "✗", tie: "＝", pending: "·", self: "—" };
 
 function conflictCells() {
-  // 冲突环上每个组合对应的两个矩阵格（i:j 与 j:i）
+  // 冲突环上每个组合对应的两个矩阵格（i:j 与 j:i）；矩阵仅含启用候选项
   const cells = new Set();
   if (state.conflict) {
-    const pos = new Map(state.candidates.map((name, i) => [name, i]));
+    const pos = new Map(state.active_candidates.map((name, i) => [name, i]));
     for (const e of state.conflict.edges) {
       const i = pos.get(e.a);
       const j = pos.get(e.b);
@@ -116,10 +199,10 @@ function conflictCells() {
 }
 
 function suggestionCells() {
-  // 最少改判方案中各组合对应的两个矩阵格
+  // 最少改判方案中各组合对应的两个矩阵格；矩阵仅含启用候选项
   const cells = new Set();
   if (state.suggestion) {
-    const pos = new Map(state.candidates.map((name, i) => [name, i]));
+    const pos = new Map(state.active_candidates.map((name, i) => [name, i]));
     for (const p of state.suggestion.pairs) {
       const i = pos.get(p.a);
       const j = pos.get(p.b);
@@ -143,8 +226,8 @@ function renderMatrix() {
   corner.textContent = "选两项";
   corner.title = "点击行/列标题选择两个候选项，查看双向最强路径与排名依据";
   headRow.appendChild(corner);
-  for (let j = 0; j < state.candidates.length; j++) {
-    const name = state.candidates[j];
+  for (let j = 0; j < state.active_candidates.length; j++) {
+    const name = state.active_candidates[j];
     const th = document.createElement("th");
     th.textContent = name;
     th.title = basisSelection.includes(name)
@@ -163,13 +246,13 @@ function renderMatrix() {
   state.matrix.forEach((cells, i) => {
     const tr = document.createElement("tr");
     const th = document.createElement("th");
-    th.textContent = state.candidates[i];
-    th.title = basisSelection.includes(state.candidates[i])
-      ? `${state.candidates[i]}（已选择，再次点击取消）`
-      : `选择 ${state.candidates[i]} 作为排名依据的第 ${basisSelection.length + 1} 个候选项`;
+    th.textContent = state.active_candidates[i];
+    th.title = basisSelection.includes(state.active_candidates[i])
+      ? `${state.active_candidates[i]}（已选择，再次点击取消）`
+      : `选择 ${state.active_candidates[i]} 作为排名依据的第 ${basisSelection.length + 1} 个候选项`;
     th.classList.add("matrix-pick");
-    if (basisSelection.includes(state.candidates[i])) th.classList.add("matrix-pick-selected");
-    th.addEventListener("click", () => toggleBasisCandidate(state.candidates[i]));
+    if (basisSelection.includes(state.active_candidates[i])) th.classList.add("matrix-pick-selected");
+    th.addEventListener("click", () => toggleBasisCandidate(state.active_candidates[i]));
     tr.appendChild(th);
     cells.forEach((cell, j) => {
       const td = document.createElement("td");
@@ -177,15 +260,15 @@ function renderMatrix() {
       td.textContent = SYMBOLS[cell];
       const key = `${i}:${j}`;
       const isBasisPair = i !== j && basisSelection.length === 2 &&
-        basisSelection.includes(state.candidates[i]) &&
-        basisSelection.includes(state.candidates[j]);
+        basisSelection.includes(state.active_candidates[i]) &&
+        basisSelection.includes(state.active_candidates[j]);
       if (conflicts.has(key)) {
         td.classList.add("cell-conflict");
         td.title = "循环冲突组合，点击重新判定";
         td.addEventListener("click", () => {
           selectConflictPair({
-            a: state.candidates[Math.min(i, j)],
-            b: state.candidates[Math.max(i, j)],
+            a: state.active_candidates[Math.min(i, j)],
+            b: state.active_candidates[Math.max(i, j)],
           });
         });
       } else if (suggested.has(key)) {
@@ -193,8 +276,8 @@ function renderMatrix() {
         td.title = "最少改判方案：点击可手动重新判定";
         td.addEventListener("click", () => {
           selectConflictPair({
-            a: state.candidates[Math.min(i, j)],
-            b: state.candidates[Math.max(i, j)],
+            a: state.active_candidates[Math.min(i, j)],
+            b: state.active_candidates[Math.max(i, j)],
           });
         });
       } else if (i !== j) {
@@ -203,7 +286,7 @@ function renderMatrix() {
         if (isBasisPair) td.classList.add("cell-basis");
         td.title = "点击查看这两个候选项的排名依据";
         td.addEventListener("click", () => {
-          pickBasisPair(state.candidates[i], state.candidates[j]);
+          pickBasisPair(state.active_candidates[i], state.active_candidates[j]);
         });
       }
       tr.appendChild(td);
@@ -467,9 +550,9 @@ function renderPathBlock(title, path, lead) {
 function renderBasis() {
   const card = $("#basis-card");
 
-  // 新一轮候选项变化后，剔除失效选择
-  if (state && basisSelection.some((n) => !state.candidates.includes(n))) {
-    basisSelection = basisSelection.filter((n) => state.candidates.includes(n));
+  // 候选项变化（新一轮 / 停用）后，剔除已不在启用集合中的失效选择
+  if (state && basisSelection.some((n) => !state.active_candidates.includes(n))) {
+    basisSelection = basisSelection.filter((n) => state.active_candidates.includes(n));
     basisData = null;
   }
 

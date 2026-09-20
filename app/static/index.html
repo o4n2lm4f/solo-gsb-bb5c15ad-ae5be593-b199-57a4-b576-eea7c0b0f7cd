@@ -122,13 +122,24 @@
       <div class="grid">
         <div class="card">
           <h3>实时排名（Schulze）</h3>
-          <p class="muted card-hint">点击两个候选项名称，可在下方查看「排名依据」</p>
+          <p class="muted card-hint">点击两个候选项名称，可在下方查看「排名依据」（仅统计启用候选项）</p>
           <div id="ranking"></div>
         </div>
         <div class="card">
           <h3>尚未比较的组合</h3>
           <div id="pending-list" class="chips"></div>
         </div>
+      </div>
+
+      <!-- 候选管理：停用 / 恢复 -->
+      <div class="card">
+        <h3>🧩 候选管理（停用 / 恢复）</h3>
+        <p class="muted card-hint">
+          评审进行中可随时停用候选项：停用不删除其判断记录，进度、待比较组合、排名、矩阵、
+          循环冲突、最少改判与下一对推荐均只按启用候选项重算，至少保留 3 个启用候选项。
+          恢复后按最初录入顺序回到评审，已有组合沿用原判断，仅缺失组合重新进入待评审。
+        </p>
+        <div id="candidate-manage" class="candidate-list"></div>
       </div>
 
       <!-- 排名依据 -->
